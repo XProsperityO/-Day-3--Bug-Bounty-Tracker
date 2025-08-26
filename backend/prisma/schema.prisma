@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Severity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum VulnStatus {
+  OPEN
+  REPORTED
+  TRIAGED
+  RESOLVED
+  REJECTED
+  DUPLICATE
+  PAID
+}
+
+enum Platform {
+  HACKERONE
+  BUGCROWD
+  INTIGRITI
+  YESWEHACK
+  PRIVATE
+}
+
+enum Plan {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String?
+  role         String   @default("USER")
+  totpEnabled  Boolean  @default(false)
+  totpSecret   String?  // encrypted (future: separate table + KMS)
+  plan         Plan?    @default(STARTER)
+  subscriptionId String?
+  customerId     String?
+  planUpdatedAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  vulnerabilities Vulnerability[]
+  notes        Note[]
+  refreshTokens RefreshToken[]
+
+  @@index([plan])
+}
+
+model Vulnerability {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  title        String
+  description  String
+  severity     Severity  @default(MEDIUM)
+  cvssVector   String?
+  cvssScore    Float?
+  status       VulnStatus @default(OPEN)
+  payoutAmount Decimal?  @db.Decimal(10,2)
+  target       String?
+  tags         String[]
+  discoveredAt DateTime?
+  reportedAt   DateTime?
+  resolvedAt   DateTime?
+  paidAt       DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  submissions  Submission[]
+  timeline     TimelineEvent[]
+  notes        Note[]
+
+  @@index([userId, status])
+  @@index([userId, severity])
+  @@index([userId, createdAt])
+}
+
+model Submission {
+  id             String   @id @default(uuid())
+  vulnerabilityId String
+  vulnerability   Vulnerability @relation(fields: [vulnerabilityId], references: [id])
+  platform       Platform
+  externalId     String?
+  url            String?
+  state          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model TimelineEvent {
+  id             String   @id @default(uuid())
+  vulnerabilityId String
+  vulnerability   Vulnerability @relation(fields: [vulnerabilityId], references: [id])
+  type           String
+  message        String?
+  happenedAt     DateTime @default(now())
+  meta           Json?
+  createdAt      DateTime @default(now())
+}
+
+model Note {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  vulnerabilityId String?
+  vulnerability   Vulnerability? @relation(fields: [vulnerabilityId], references: [id])
+  title          String
+  content        String
+  tags           String[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revoked   Boolean  @default(false)
+}

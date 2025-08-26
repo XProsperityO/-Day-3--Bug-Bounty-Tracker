@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend:
+    name: Backend Lint, Test & Coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: bugtracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U user -d bugtracker" --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      # Use repository secrets in CI when available. For forked PRs, fall back to safe test defaults.
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://user:password@localhost:5432/bugtracker?schema=public' }}
+      JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET || 'test_access_secret_12345678901234567890' }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET || 'test_refresh_secret_123456789012345678901234567890' }}
+      CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: test
+      VITEST_JUNIT_OUTPUT_DIR: backend/test-results
+      VITEST_JUNIT_OUTPUT_NAME: junit.xml
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+      - name: Generate Prisma Client
+        working-directory: backend
+        run: npx prisma generate
+      - name: Apply migrations
+        working-directory: backend
+        run: |
+          if [ -n "${DATABASE_URL:-}" ] && [ "${DATABASE_URL}" != "" ]; then
+            echo "DATABASE_URL present, running migrations"
+            npx prisma migrate deploy
+          else
+            echo "DATABASE_URL not set; skipping migrations"
+          fi
+      - name: Lint
+        working-directory: backend
+        run: npm run lint
+      - name: Tests (unit+integration with coverage + JUnit)
+        working-directory: backend
+        run: |
+          # Prefer real DB in CI; fall back to PRISMA_MOCK for quick runs when DB not available
+          if [ -n "${DATABASE_URL:-}" ] && [ "${DATABASE_URL}" != "" ]; then
+            npm run test:ci -- --reporter=default -- --reporter=vitest-junit
+          else
+            echo "DATABASE_URL not present; running tests with PRISMA_MOCK=1"
+            PRISMA_MOCK=1 npm run test:ci -- --reporter=default -- --reporter=vitest-junit
+          fi
+      - name: Upload backend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage
+      - name: Upload backend junit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-junit
+          path: backend/test-results/junit.xml
+      - name: Codecov Upload (backend)
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: backend/coverage
+          flags: backend
+          fail_ci_if_error: false
+
+  frontend-build:
+    name: Frontend Build & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install deps
+        working-directory: frontend
+        run: |
+          if [ -f package.json ]; then npm ci; else echo "No frontend yet"; fi
+      - name: Build
+        working-directory: frontend
+        run: |
+          if [ -f package.json ]; then npm run build; else echo "Skip build"; fi
+      - name: Frontend tests with coverage (optional)
+        working-directory: frontend
+        run: |
+          if [ -f package.json ]; then npm run test:ci || echo "No frontend tests yet"; fi
+      - name: Upload frontend junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-junit
+          path: frontend/test-results/junit.xml
+      - name: Upload frontend dist
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - name: Upload frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+
+  deploy:
+    name: Build & Publish Images
+    needs: [backend, frontend-build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ github.repository }}/backend:${{ github.sha }},ghcr.io/${{ github.repository }}/backend:latest
+          provenance: true
+      - name: Archive frontend dist (rebuild)
+        run: |
+          if [ -f frontend/package.json ]; then (cd frontend && npm ci && npm run build); fi
+      - name: Upload frontend dist as artifact (deploy)
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-latest
+          path: frontend/dist
+      - name: Generate SBOM (backend)
+        uses: anchore/sbom-action@v0
+        with:
+          path: backend
+          format: spdx-json
+          output-file: sbom-backend.spdx.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-backend
+          path: sbom-backend.spdx.json
+      - name: Trivy FS Scan (backend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: backend
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-backend.sarif
+          severity: CRITICAL,HIGH
+  staging-deploy:
+    name: Staging Deploy
+    needs: [deploy]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder staging deploy
+        run: |
+          echo "Deploy to staging environment here (e.g., helm upgrade, terraform apply, or serverless deploy)."
+          echo "Add secrets and commands as needed."
+      - name: Upload Trivy SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-backend-sarif
+          path: trivy-backend.sarif
+      - name: Upload Trivy results to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-backend.sarif

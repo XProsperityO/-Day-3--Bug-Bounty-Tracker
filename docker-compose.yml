@@ -1,0 +1,24 @@
+version: '3.9'
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: user
+      POSTGRES_DB: bugtracker
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://user:password@db:5432/bugtracker?schema=public
+      JWT_ACCESS_SECRET: devaccesssecretdevaccesssecret1234
+      JWT_REFRESH_SECRET: devrefreshsecretdevrefreshsecretdevrefreshsecret1234
+      CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: development
+    depends_on: [db]
+    ports: ["3000:3000"]
+    command: sh -c "npx prisma migrate deploy && node dist/index.js"
+volumes:
+  pgdata: {}

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bug-bounty-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bug-bounty-backend
+  template:
+    metadata:
+      labels:
+        app: bug-bounty-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/OWNER/REPO/backend:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bug-bounty-secrets
+                  key: DATABASE_URL
+            - name: JWT_ACCESS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bug-bounty-secrets
+                  key: JWT_ACCESS_SECRET
+            - name: JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bug-bounty-secrets
+                  key: JWT_REFRESH_SECRET
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: bug-bounty-secrets
+                  key: STRIPE_SECRET_KEY
+            - name: STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bug-bounty-secrets
+                  key: STRIPE_WEBHOOK_SECRET
+            - name: APP_BASE_URL
+              value: "https://staging.bugbountytracker.com"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bug-bounty-backend
+spec:
+  selector:
+    app: bug-bounty-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
