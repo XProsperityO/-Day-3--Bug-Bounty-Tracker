@@ -156,6 +156,16 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository }}/backend:${{ github.sha }},ghcr.io/${{ github.repository }}/backend:latest
           provenance: true
+      - name: Validate deploy secrets
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "Validating required deploy secrets..."
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then echo "ERROR: DATABASE_URL secret is missing"; exit 1; fi
+          if [ -z "${{ secrets.JWT_ACCESS_SECRET }}" ]; then echo "ERROR: JWT_ACCESS_SECRET secret is missing"; exit 1; fi
+          if [ -z "${{ secrets.JWT_REFRESH_SECRET }}" ]; then echo "ERROR: JWT_REFRESH_SECRET secret is missing"; exit 1; fi
+          if [ -z "${{ secrets.SENTRY_DSN }}" ]; then echo "ERROR: SENTRY_DSN secret is missing"; exit 1; fi
+          if [ -z "${{ secrets.STRIPE_SECRET_KEY }}" ]; then echo "ERROR: STRIPE_SECRET_KEY secret is missing"; exit 1; fi
+          if [ -z "${{ secrets.STRIPE_WEBHOOK_SECRET }}" ]; then echo "ERROR: STRIPE_WEBHOOK_SECRET secret is missing"; exit 1; fi
       - name: Archive frontend dist (rebuild)
         run: |
           if [ -f frontend/package.json ]; then (cd frontend && npm ci && npm run build); fi

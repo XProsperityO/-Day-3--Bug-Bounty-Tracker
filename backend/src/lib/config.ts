@@ -4,7 +4,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: z.string().optional(),
   DATABASE_URL_TEST: z.string().optional(),
-  JWT_ACCESS_SECRET: z.string().min(16).optional(),
+  JWT_ACCESS_SECRET: z.string().min(32).optional(),
   JWT_REFRESH_SECRET: z.string().min(32).optional(),
   ACCESS_TOKEN_TTL_MINUTES: z.string().transform(v => parseInt(v)).default('10'),
   REFRESH_TOKEN_TTL_DAYS: z.string().transform(v => parseInt(v)).default('7'),
